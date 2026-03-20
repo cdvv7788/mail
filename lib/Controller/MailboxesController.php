@@ -19,6 +19,7 @@ use OCA\Mail\Exception\IncompleteSyncException;
 use OCA\Mail\Exception\MailboxNotCachedException;
 use OCA\Mail\Exception\NotImplemented;
 use OCA\Mail\Exception\ServiceException;
+use OCA\Mail\Http\SidecarClient;
 use OCA\Mail\Http\TrapError;
 use OCA\Mail\Service\AccountService;
 use OCA\Mail\Service\Sync\SyncService;
@@ -31,6 +32,7 @@ use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IConfig;
 use OCP\IRequest;
+use OCP\Security\ICrypto;
 
 #[OpenAPI(scope: OpenAPI::SCOPE_IGNORE)]
 class MailboxesController extends Controller {
@@ -48,6 +50,8 @@ class MailboxesController extends Controller {
 		SyncService $syncService,
 		private readonly IConfig $config,
 		private readonly ITimeFactory $timeFactory,
+		private readonly SidecarClient $sidecarClient,
+		private readonly ICrypto $crypto,
 	) {
 		parent::__construct($appName, $request);
 
@@ -75,14 +79,24 @@ class MailboxesController extends Controller {
 		}
 
 		$account = $this->accountService->find($this->currentUserId, $accountId);
+		$mailAccount = $account->getMailAccount();
+		$password = $mailAccount->getInboundPassword() !== null
+			? $this->crypto->decrypt($mailAccount->getInboundPassword())
+			: '';
 
-		$mailboxes = $this->mailManager->getMailboxes($account, $forceSync);
-		return new JSONResponse([
-			'id' => $accountId,
+		$result = $this->sidecarClient->forward('POST', '/mailboxes', [
+			'accountId' => $accountId,
 			'email' => $account->getEmail(),
-			'mailboxes' => $mailboxes,
-			'delimiter' => $mailboxes[0]?->getDelimiter(),
+			'imap' => SidecarClient::buildImapCredentials(
+				$mailAccount->getInboundHost(),
+				$mailAccount->getInboundPort(),
+				$mailAccount->getInboundUser(),
+				$password,
+				$mailAccount->getInboundSslMode(),
+			),
 		]);
+
+		return new JSONResponse($result);
 	}
 
 	/**
