@@ -79,30 +79,6 @@ class MailboxesController extends Controller {
 		}
 
 		$account = $this->accountService->find($this->currentUserId, $accountId);
-
-		// Try sidecar first, fall back to Horde
-		if ($this->sidecarClient->isAvailable()) {
-			try {
-				return $this->indexViaSidecar($account, $accountId);
-			} catch (\Exception $e) {
-				// Sidecar failed, fall through to Horde
-			}
-		}
-
-		// Original Horde path (fallback)
-		$mailboxes = $this->mailManager->getMailboxes($account, $forceSync);
-		return new JSONResponse([
-			'id' => $accountId,
-			'email' => $account->getEmail(),
-			'mailboxes' => $mailboxes,
-			'delimiter' => $mailboxes[0]?->getDelimiter(),
-		]);
-	}
-
-	/**
-	 * Forward mailbox listing to the Go sidecar.
-	 */
-	private function indexViaSidecar(\OCA\Mail\Account $account, int $accountId): JSONResponse {
 		$mailAccount = $account->getMailAccount();
 		$password = $mailAccount->getInboundPassword() !== null
 			? $this->crypto->decrypt($mailAccount->getInboundPassword())
@@ -110,6 +86,7 @@ class MailboxesController extends Controller {
 
 		$result = $this->sidecarClient->forward('POST', '/mailboxes', [
 			'accountId' => $accountId,
+			'email' => $account->getEmail(),
 			'imap' => SidecarClient::buildImapCredentials(
 				$mailAccount->getInboundHost(),
 				$mailAccount->getInboundPort(),
