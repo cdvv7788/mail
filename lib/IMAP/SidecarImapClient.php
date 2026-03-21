@@ -28,6 +28,7 @@ class SidecarImapClient extends Horde_Imap_Client_Socket {
 	private array $imapCreds;
 	private int $accountId;
 	private string $email;
+	private bool $hordeConnected = false;
 
 	/**
 	 * @param array $params Horde client params (username, password, hostspec, port, secure)
@@ -57,21 +58,43 @@ class SidecarImapClient extends Horde_Imap_Client_Socket {
 	}
 
 	/**
-	 * Override _login to prevent real IMAP authentication.
-	 * The sidecar handles connection management.
+	 * No-op on initial call — sidecar-overridden methods don't need a connection.
+	 * Real Horde login happens lazily via _sendCmd() when an unoverridden method
+	 * tries to talk to the IMAP server.
 	 */
 	#[\Override]
 	protected function _login() {
-		// No-op — sidecar manages IMAP connections.
 		return true;
 	}
 
 	/**
-	 * Override logout to prevent real IMAP LOGOUT.
+	 * Only logout if we actually opened a Horde connection.
 	 */
 	#[\Override]
 	public function logout() {
-		// No-op — sidecar manages connection lifecycle.
+		if ($this->hordeConnected) {
+			parent::logout();
+		}
+	}
+
+	/**
+	 * Intercept all Horde IMAP wire traffic. If an unoverridden method
+	 * (fetch, store, etc.) falls through to Horde, establish a real connection
+	 * on first use so the command can proceed.
+	 */
+	#[\Override]
+	protected function _sendCmd($cmd) {
+		if (!$this->hordeConnected) {
+			$this->hordeConnected = true;
+			$this->logger->info(
+				'Horde fallback: opening real IMAP connection for account {id}',
+				['id' => $this->accountId]
+			);
+			// Reset auth state so parent::_login() actually connects.
+			$this->_isAuthenticated = false;
+			parent::_login();
+		}
+		return parent::_sendCmd($cmd);
 	}
 
 	/**
@@ -113,6 +136,13 @@ class SidecarImapClient extends Horde_Imap_Client_Socket {
 			];
 		}
 
+		if (!empty($options['flat'])) {
+			return array_values(array_map(
+				fn(array $entry) => $entry['mailbox'],
+				$result,
+			));
+		}
+
 		return $result;
 	}
 
@@ -129,8 +159,21 @@ class SidecarImapClient extends Horde_Imap_Client_Socket {
 	// Each status() call here triggers a separate POST /imap/status → IMAP STATUS,
 	// creating N+1 HTTP round trips. Optimize by either including counts in the
 	// /imap/list response and caching them here, or adding a combined endpoint.
+	// Flags the sidecar can handle — everything else falls through to Horde.
+	private const SIDECAR_STATUS_FLAGS = \Horde_Imap_Client::STATUS_MESSAGES
+		| \Horde_Imap_Client::STATUS_UNSEEN
+		| \Horde_Imap_Client::STATUS_UIDNEXT
+		| \Horde_Imap_Client::STATUS_UIDVALIDITY
+		| \Horde_Imap_Client::STATUS_HIGHESTMODSEQ;
+
 	#[\Override]
 	public function status($mailbox, $flags = 0, array $opts = []) {
+		// If caller requests flags we don't handle (SYNCMODSEQ, PERMFLAGS, etc.),
+		// fall through to Horde which manages its own internal state for those.
+		if (($flags & ~self::SIDECAR_STATUS_FLAGS) !== 0) {
+			return parent::status($mailbox, $flags, $opts);
+		}
+
 		$mailboxName = ($mailbox instanceof Horde_Imap_Client_Mailbox)
 			? $mailbox->utf8
 			: (string)$mailbox;
@@ -158,6 +201,9 @@ class SidecarImapClient extends Horde_Imap_Client_Socket {
 		return [
 			'messages' => $response['messages'] ?? 0,
 			'unseen' => $response['unseen'] ?? 0,
+			'uidnext' => $response['uidnext'] ?? 0,
+			'uidvalidity' => $response['uidvalidity'] ?? 0,
+			'highestmodseq' => $response['highestmodseq'] ?? 0,
 		];
 	}
 

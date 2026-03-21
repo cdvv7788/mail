@@ -38,12 +38,15 @@ class SidecarClient {
 	 * Forward a request to the Go sidecar.
 	 *
 	 * @param string $method HTTP method (GET, POST, PUT, DELETE)
-	 * @param string $path API path (e.g., /mailboxes)
-	 * @param array $data Request data (sent as JSON body)
+	 * @param string $path API path (e.g., /imap/list)
+	 * @param array $data Request body data (sent as JSON)
+	 * @param array $imapCreds IMAP credentials (sent as base64-encoded JSON in X-IMAP-Credentials header)
+	 * @param int $accountId Account ID (sent in X-Account-Id header)
+	 * @param string $email Account email (sent in X-Account-Email header)
 	 * @return array Decoded JSON response
 	 * @throws \Exception If the sidecar is unreachable or returns an error
 	 */
-	public function forward(string $method, string $path, array $data = []): array {
+	public function forward(string $method, string $path, array $data = [], array $imapCreds = [], int $accountId = 0, string $email = ''): array {
 		$baseUrl = $this->config->getSystemValueString(
 			'app.mail.sidecar_url',
 			'http://sidecar:3000'
@@ -59,6 +62,16 @@ class SidecarClient {
 			],
 			'timeout' => 10,
 		];
+
+		if (!empty($imapCreds)) {
+			$options['headers']['X-IMAP-Credentials'] = base64_encode(json_encode($imapCreds));
+		}
+		if ($accountId > 0) {
+			$options['headers']['X-Account-Id'] = (string)$accountId;
+		}
+		if ($email !== '') {
+			$options['headers']['X-Account-Email'] = $email;
+		}
 
 		if (!empty($data)) {
 			$options['body'] = json_encode($data);
