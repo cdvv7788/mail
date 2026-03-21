@@ -12,6 +12,8 @@ namespace OCA\Mail\AppInfo;
 
 use Horde_Translation;
 use OCA\Mail\ContextChat\ContextChatProvider;
+use OCA\Mail\IMAP\IMAPClientFactory;
+use OCA\Mail\IMAP\SidecarImapClientFactory;
 use OCA\Mail\Contracts\IAttachmentService;
 use OCA\Mail\Contracts\IAvatarService;
 use OCA\Mail\Contracts\IDkimService;
@@ -127,6 +129,11 @@ final class Application extends App implements IBootstrap {
 		$context->registerServiceAlias(IUserPreferences::class, UserPreferenceService::class);
 		$context->registerServiceAlias(IDkimService::class, DkimService::class);
 		$context->registerServiceAlias(IDkimValidator::class, DkimValidator::class);
+
+		// Swap Horde IMAP client factory with sidecar-backed factory.
+		// All code that injects IMAPClientFactory will get SidecarImapClientFactory,
+		// which returns SidecarImapClient instances that delegate to the Go sidecar.
+		$context->registerServiceAlias(IMAPClientFactory::class, SidecarImapClientFactory::class);
 
 		$context->registerEventListener(AddMissingIndicesEvent::class, OptionalIndicesListener::class);
 		$context->registerEventListener(BeforeImapClientCreated::class, OauthTokenRefreshListener::class);
